@@ -1,0 +1,11 @@
+{
+  "name": "@local/dsh-zaoyu-preset",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "早鱼：项目工作台指挥官，固定协调工具，扩展能力按阶段加载。",
+  "exports": {".": "./runtime.js", "./locale/*.json": "./locale/*.json", "./icon": "./icon.svg"},
+  "files": ["runtime.js", "policy.js", "cordis.patch.yml", "locale", "icon.svg", "README.md"],
+  "dsh": {"bundle": {"patch": "./cordis.patch.yml"}},
+  "engines": {"dsh": ">=0.2.2-rc.3"}
+}
