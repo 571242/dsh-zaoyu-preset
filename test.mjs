@@ -96,7 +96,9 @@ try {
   assert.deepEqual(names().sort(), ['read', 'write', 'apply_patch', 'web_search', 'mnemon_recall', 'subagent',
     'subagent_fork', 'send_message', 'list_agents', 'interrupt_agent', 'wait_agent',
     'list_subagent_models', 'zaoyu_tools'].sort());
-  assert.equal(zaoyuPlain.restrictions, 1);
+  const maskCount = zaoyuPlain.restrictions;
+  await run(zaoyuPlain);
+  assert.equal(zaoyuPlain.restrictions, maskCount, 'unchanged tool registry does not rebuild the mask');
   assert(!xianhua.definitions.has('zaoyu_tools'));
   assert(!child.definitions.has('zaoyu_tools'));
   assert.equal(zaoyuPlain.sections.get('deployment:persona-prefix').text, prefix);
@@ -121,7 +123,7 @@ try {
   const expand = zaoyuPlain.definitions.get('zaoyu_tools');
   const schemas = JSON.stringify(zaoyuPlain.agent.ctx.tools.schemas());
   const initialStatus = await expand.execute({groups: []});
-  assert.equal(zaoyuPlain.restrictions, 1);
+  assert.equal(zaoyuPlain.restrictions, maskCount);
   assert.equal(JSON.stringify(zaoyuPlain.agent.ctx.tools.schemas()), schemas);
   assert.deepEqual(initialStatus.groups.admin.tools, ['plugin_manager']);
   assert.equal(initialStatus.groups.admin.count, 1);
@@ -129,7 +131,21 @@ try {
   await expand.execute({groups: ['admin']});
   assert(names().includes('plugin_manager'));
   assert.deepEqual((await expand.execute({groups: []})).active, ['admin']);
-  assert.equal(zaoyuPlain.restrictions, 2);
+  assert.equal(zaoyuPlain.restrictions, maskCount + 1);
+
+  const addBrowserTool = zaoyuPlain.agent.ctx.tools.register({name: 'bsk_new', parameters: {type: 'object'}});
+  listeners.get('tools/change')();
+  await run(zaoyuPlain);
+  let browser = (await expand.execute({groups: []})).groups.browser;
+  assert.deepEqual(browser.tools.sort(), ['bsk_new', 'bsk_session']);
+  assert.deepEqual(browser.visible, []);
+  await expand.execute({groups: ['browser']});
+  browser = (await expand.execute({groups: []})).groups.browser;
+  assert.deepEqual(browser.visible.sort(), ['bsk_new', 'bsk_session']);
+  addBrowserTool();
+  listeners.get('tools/change')();
+  await run(zaoyuPlain);
+  assert.deepEqual((await expand.execute({groups: []})).groups.browser.tools, ['bsk_session']);
 
   // Expanding all groups leaves hidden=[] -> no empty restrict call
   await expand.execute({groups: Object.keys(GROUPS)});

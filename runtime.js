@@ -16,10 +16,24 @@ function isStudioProject(ctx, agent) {
 
 export function apply(ctx) {
   const installed = new Map();
+  let registryRevision = 0;
+  let updatingMask = false;
+  ctx.on('tools/change', () => {
+    if (!updatingMask) registryRevision++;
+  });
   function attach(agent) {
+    const existing = installed.get(agent);
     if (ctx.agentPresets.presetForSession(agent.session) !== 'zaoyu'
-      || agent.session.header.parentSession !== undefined || installed.has(agent)) return;
-    const dispose = agent.ctx.effect(() => {
+      || agent.session.header.parentSession !== undefined) {
+      existing?.dispose();
+      return;
+    }
+    if (existing) {
+      existing.refresh();
+      return;
+    }
+    const entry = {};
+    entry.dispose = agent.ctx.effect(() => {
       const ac = agent.ctx;
       const active = new Set();
       const original = ac.tools.schemas(agent);
@@ -27,26 +41,34 @@ export function apply(ctx) {
       let release = () => {};
       let definitions = [];
       const cleanups = [];
-      function select(groups, reset) {
-        release();
-        if (reset) active.clear();
-        for (const group of groups) active.add(group);
-        definitions = ac.tools.definitions(agent).filter(tool => tool.name !== 'zaoyu_tools');
-        const hidden = hiddenNames(definitions, active);
-        release = hidden.length ? ac.tools.restrict({deny: hidden}) : () => {};
+      let seenRevision;
+      function refresh() {
+        // Replacing our mask emits tools/change too; only external changes invalidate this snapshot.
+        updatingMask = true;
+        try {
+          release();
+          definitions = ac.tools.definitions(agent).filter(tool => tool.name !== 'zaoyu_tools');
+          const hidden = hiddenNames(definitions, active);
+          release = hidden.length ? ac.tools.restrict({deny: hidden}) : () => {};
+        } finally {
+          updatingMask = false;
+        }
+        seenRevision = registryRevision;
       }
+      entry.refresh = () => { if (seenRevision !== registryRevision) refresh(); };
       function status() {
         const schemas = ac.tools.schemas(agent);
+        const visible = new Set(schemas.map(tool => tool.name));
+        const inventory = definitions.filter(tool => !visible.has(tool.name)).concat(schemas);
         return {
           active: [...active], before,
           current: {tools: schemas.length, schemaChars: JSON.stringify(schemas).length},
           groups: Object.fromEntries(Object.entries(GROUPS).map(([key, label]) => {
-            const tools = definitions.filter(tool => groupOf(tool.name) === key).map(tool => tool.name);
-            return [key, {label, count: tools.length, tools}];
+            const tools = inventory.filter(tool => groupOf(tool.name) === key).map(tool => tool.name);
+            return [key, {label, count: tools.length, tools, visible: tools.filter(name => visible.has(name))}];
           })),
         };
       }
-      select([], false);
       cleanups.push(ac.tools.register({
         name: 'zaoyu_tools',
         description: '按需展开早鱼的扩展工具组，开启后在本会话保留。groups=[]仅查看状态及各组工具名，不改变工具；reset=true明确复位后启用所选组，不用完即复位。',
@@ -61,7 +83,11 @@ export function apply(ctx) {
           render: (_args, value) => [{type: 'text', text: JSON.stringify(value)}],
         },
         async execute({groups, reset = false}) {
-          if (reset || groups.length) select(groups, reset);
+          if (reset || groups.length) {
+            if (reset) active.clear();
+            for (const group of groups) active.add(group);
+            refresh();
+          }
           return status();
         },
       }));
@@ -78,20 +104,21 @@ export function apply(ctx) {
         text: '常用工具及未折叠基础工具直接调用。需要扩展能力时调用 zaoyu_tools 启用对应组；助手自行选择，无需用户记工具名。',
         interpolate: false,
       }));
+      refresh();
       return () => {
         release();
         for (const cleanup of cleanups.reverse()) cleanup();
         installed.delete(agent);
       };
     });
-    installed.set(agent, dispose);
+    installed.set(agent, entry);
   }
   ctx.on('agent/pre-step', ({agent}, next) => {
     attach(agent);
     return next();
   });
   ctx.effect(() => () => {
-    for (const dispose of installed.values()) dispose();
+    for (const entry of installed.values()) entry.dispose();
     installed.clear();
   });
 }
